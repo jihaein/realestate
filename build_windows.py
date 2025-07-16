@@ -26,11 +26,20 @@ def generate_secret_key():
     return base64.b64encode(os.urandom(32)).decode('utf-8')
 
 def create_env_file(directory):
-    """실제 환경 변수 파일 생성"""
+    # 기존 .env 파일에서 NAVER_ID, NAVER_PW 읽기
+    env_path = os.path.join(directory, '.env')
+    naver_id = ""
+    naver_pw = ""
+    if os.path.exists(env_path):
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith("NAVER_ID="):
+                    naver_id = line.strip()
+                if line.startswith("NAVER_PW="):
+                    naver_pw = line.strip()
     try:
         # Import PyJWT
         jwt = ensure_jwt_installed()
-
         # Generate a new JWT token that will be valid for 3 hours from now
         secret_key = generate_secret_key()
         current_time = int(time.time())
@@ -49,11 +58,9 @@ def create_env_file(directory):
         # Use a fallback token if JWT generation fails
         secret_key = generate_secret_key()
         token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IlJFQUxFU1RBVEUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDAxMDAwMH0.KwYXPGCsSelmJRHhMQZrUFZZlUa4Q9jQ8eUl3Yx0Zk8"
-    
     # Generate current timestamp in Korean time
     kst_time = datetime.now() + timedelta(hours=9)  # Convert to KST
     realestate_cookie = kst_time.strftime("%a %b %d %Y %H:%M:%S GMT+0900 (Korean Standard Time)")
-    
     # Update cookies with current timestamp
     env_content = (
         "# 네이버 부동산 API 인증 정보\n"
@@ -69,8 +76,11 @@ def create_env_file(directory):
         "OPENAI_API_KEY=\n\n"
         f"# JWT Secret Key\nJWT_SECRET_KEY={secret_key}\n"
     )
-    
-    env_path = os.path.join(directory, '.env')
+    # NAVER_ID, NAVER_PW 보존
+    if naver_id:
+        env_content += f"{naver_id}\n"
+    if naver_pw:
+        env_content += f"{naver_pw}\n"
     with open(env_path, 'w', encoding='utf-8') as f:
         f.write(env_content)
 
