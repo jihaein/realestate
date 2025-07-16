@@ -21,6 +21,7 @@ import base64
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from seleniumwire import webdriver
 
 def get_resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
@@ -52,20 +53,12 @@ def generate_jwt_token():
     )
     return f"Bearer {token}"
 
-def get_naver_cookies_auto():
-    import os
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-    except ImportError:
-        print("selenium 패키지가 설치되어 있어야 자동 쿠키 갱신이 가능합니다. requirements.txt에 selenium을 추가하고 설치하세요.")
-        return {}
+def get_naver_auth_and_cookies():
     naver_id = os.getenv('NAVER_ID')
     naver_pw = os.getenv('NAVER_PW')
     if not naver_id or not naver_pw:
         print("환경변수 NAVER_ID, NAVER_PW가 필요합니다.")
-        return {}
+        return None, None
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
@@ -73,25 +66,26 @@ def get_naver_cookies_auto():
     driver = webdriver.Chrome(options=options)
     try:
         driver.get('https://nid.naver.com/nidlogin.login')
-        driver.implicitly_wait(5)
         driver.find_element(By.ID, 'id').send_keys(naver_id)
         driver.find_element(By.ID, 'pw').send_keys(naver_pw)
         driver.find_element(By.ID, 'log.login').click()
         driver.implicitly_wait(5)
         driver.get('https://land.naver.com/')
         driver.implicitly_wait(5)
-        cookies = driver.get_cookies()
-        cookie_dict = {c['name']: c['value'] for c in cookies}
-        needed_keys = [
-            'NNB', 'nhn.realestate.article.rlet_type_cd', 'nhn.realestate.article.trade_type_cd',
-            'nhn.realestate.article.ipaddress_city', 'landHomeFlashUseYn', 'NAC', 'NACT',
-            'REALESTATE', 'SRT30', 'SRT5', 'JSESSIONID', 'NFS', 'NID_AUT', 'NID_SES'
-        ]
-        filtered = {k: v for k, v in cookie_dict.items() if k in needed_keys}
-        return filtered
+        # 매물 상세 API가 호출되는 페이지로 이동 (실제 매물번호로 대체)
+        driver.get('https://new.land.naver.com/complexes/142817?articleNo=12345678')
+        driver.implicitly_wait(5)
+        auth_token = None
+        for request in driver.requests:
+            if request.response and 'authorization' in request.headers:
+                auth_token = request.headers['authorization']
+                break
+        # 쿠키 dict 추출
+        cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+        return auth_token, cookies
     except Exception as e:
-        print(f"네이버 자동 로그인/쿠키 추출 실패: {e}")
-        return {}
+        print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
+        return None, None
     finally:
         driver.quit()
 
@@ -119,9 +113,10 @@ class RealEstateViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("부동산 매물 리스트 뷰어 (CSV)")
         self.resize(1200, 700)
-        # 네이버 인증 정보 직접 사용
-        self.naver_auth = NAVER_AUTHORIZATION
-        self.naver_cookies = NAVER_COOKIES
+        # selenium-wire로 네이버 인증정보 자동 추출
+        self.naver_auth, self.naver_cookies = get_naver_auth_and_cookies()
+        if not self.naver_auth or not self.naver_cookies:
+            raise RuntimeError("네이버 인증정보를 자동으로 가져오지 못했습니다. 환경변수 및 네트워크 상태를 확인하세요.")
         # 자동 쿠키 갱신/토큰 생성 코드 비활성화
         # self.naver_auth = generate_jwt_token()
         # self.naver_cookies = get_naver_cookies_auto()

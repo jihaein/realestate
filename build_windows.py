@@ -190,6 +190,8 @@ def main():
         '--hidden-import=base64',
         '--hidden-import=pickle',
         '--hidden-import=json',
+        '--hidden-import=seleniumwire',
+        '--hidden-import=blinker',
         'main.py'
     ])
 

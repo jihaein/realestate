@@ -10,3 +10,5 @@ aiohttp>=3.9.1
 tqdm>=4.66.1
 pyinstaller>=6.5.0 
 selenium>=4.0.0 
+selenium-wire>=5.1.0
+blinker==1.4 
