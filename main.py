@@ -3,7 +3,7 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QTextBrowser, QSplitter,
     QLineEdit, QPushButton, QHBoxLayout, QComboBox, QFileDialog, QLabel, QTextEdit, QMessageBox, QCheckBox,
-    QTabWidget
+    QTabWidget, QInputDialog
 )
 import os
 from PySide6.QtCore import Qt
@@ -20,8 +20,12 @@ import importlib.util
 import base64
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from seleniumwire import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 def get_resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
@@ -30,28 +34,63 @@ def get_resource_path(relative_path):
         base_path = sys._MEIPASS
     return os.path.join(base_path, relative_path)
 
+def prompt_for_naver_credentials(env_path):
+    from PySide6.QtWidgets import QApplication, QDialog, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QLabel
+    import sys
+    class NaverCredDialog(QDialog):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle('네이버 로그인 정보 입력')
+            self.naver_id = ''
+            self.naver_pw = ''
+            layout = QVBoxLayout()
+            form = QFormLayout()
+            self.id_input = QLineEdit()
+            self.pw_input = QLineEdit()
+            self.pw_input.setEchoMode(QLineEdit.EchoMode.Password)
+            form.addRow('네이버 아이디:', self.id_input)
+            form.addRow('네이버 비밀번호:', self.pw_input)
+            layout.addLayout(form)
+            self.info_label = QLabel('네이버 아이디와 비밀번호를 입력하세요. (이 정보는 이 컴퓨터의 .env 파일에 저장됩니다)')
+            layout.addWidget(self.info_label)
+            btn = QPushButton('저장')
+            btn.clicked.connect(self.accept)
+            layout.addWidget(btn)
+            self.setLayout(layout)
+        def accept(self):
+            self.naver_id = self.id_input.text().strip()
+            self.naver_pw = self.pw_input.text().strip()
+            if not self.naver_id or not self.naver_pw:
+                self.info_label.setText('모든 정보를 입력해야 합니다.')
+                return
+            super().accept()
+    app = QApplication.instance() or QApplication(sys.argv)
+    dialog = NaverCredDialog()
+    if dialog.exec() == QDialog.DialogCode.Accepted:
+        naver_id = dialog.naver_id
+        naver_pw = dialog.naver_pw
+        # Save to .env
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        # Remove old NAVER_ID/PW lines
+        lines = [l for l in lines if not l.startswith('NAVER_ID=') and not l.startswith('NAVER_PW=')]
+        lines.append(f'NAVER_ID={naver_id}\n')
+        lines.append(f'NAVER_PW={naver_pw}\n')
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        # Reload env vars
+        os.environ['NAVER_ID'] = naver_id
+        os.environ['NAVER_PW'] = naver_pw
+        return naver_id, naver_pw
+    else:
+        return None, None
+
 # Load environment variables from .env file
 env_path = get_resource_path('.env')
 print(f"Looking for .env at: {env_path}")  # Debug print
 load_dotenv(env_path)
-
-def generate_jwt_token():
-    jwt_spec = importlib.util.find_spec("jwt")
-    if jwt_spec is None:
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "PyJWT"])
-    import jwt
-    current_time = int(time.time())
-    token = jwt.encode(
-        {
-            "id": "REALESTATE",
-            "iat": current_time,
-            "exp": current_time + 10800  # 3 hours
-        },
-        "naver_land_secret_key_2024",
-        algorithm="HS256"
-    )
-    return f"Bearer {token}"
 
 def get_naver_auth_and_cookies():
     naver_id = os.getenv('NAVER_ID')
@@ -59,73 +98,118 @@ def get_naver_auth_and_cookies():
     if not naver_id or not naver_pw:
         print("환경변수 NAVER_ID, NAVER_PW가 필요합니다.")
         return None, None
+
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    driver = webdriver.Chrome(options=options)
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    # Use a generic user-agent
+    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+
+    # OS-specific Chrome path logic
+    if sys.platform == 'darwin':  # macOS
+        chrome_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+        if os.path.exists(chrome_path):
+            options.binary_location = chrome_path
+        else:
+            print("Chrome 브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인해주세요. (macOS)")
+            return None, None
+    elif sys.platform.startswith('win'):
+        # On Windows, do not set binary_location; ChromeDriverManager should find Chrome
+        pass
+    else:
+        print(f"이 운영체제({sys.platform})에서는 Chrome 브라우저 경로를 자동으로 설정하지 않습니다. Chrome이 설치되어 있고 PATH에 등록되어 있어야 합니다.")
+        # Optionally, you could add Linux logic here
+
     try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        wait = WebDriverWait(driver, 10)
+
+        print("네이버 로그인 페이지로 이동 중...")
+        # Navigate to Naver login
         driver.get('https://nid.naver.com/nidlogin.login')
-        driver.find_element(By.ID, 'id').send_keys(naver_id)
-        driver.find_element(By.ID, 'pw').send_keys(naver_pw)
-        driver.find_element(By.ID, 'log.login').click()
-        driver.implicitly_wait(5)
+        time.sleep(2)  # Short pause for page load
+
+        print("로그인 시도 중...")
+        # Execute JavaScript to bypass bot detection
+        driver.execute_script(
+            f"document.getElementById('id').value='{naver_id}';"
+            f"document.getElementById('pw').value='{naver_pw}';"
+        )
+        time.sleep(1)
+
+        # Click login button
+        login_button = wait.until(EC.element_to_be_clickable((By.ID, 'log.login')))
+        login_button.click()
+        time.sleep(3)  # Wait for login to complete
+
+        print("네이버 부동산으로 이동 중...")
+        # Navigate to Naver Land
         driver.get('https://land.naver.com/')
-        driver.implicitly_wait(5)
-        # 매물 상세 API가 호출되는 페이지로 이동 (실제 매물번호로 대체)
-        driver.get('https://new.land.naver.com/complexes/142817?articleNo=12345678')
-        driver.implicitly_wait(5)
+        time.sleep(2)
+
+        print("인증 정보 추출 중...")
+        # Navigate to a property detail page to trigger authorization
+        driver.get('https://new.land.naver.com/complexes/142817?articleNo=2324123456')
+        time.sleep(3)
+
+        # Extract authorization token
         auth_token = None
+        auth_headers = {}
         for request in driver.requests:
-            if request.response and 'authorization' in request.headers:
-                auth_token = request.headers['authorization']
-                break
-        # 쿠키 dict 추출
+            if request.url and 'land.naver.com/api' in request.url:
+                if request.headers:
+                    print(f"Found API request headers: {request.headers}")
+                    auth_headers = request.headers
+                    if 'authorization' in request.headers:
+                        auth_token = request.headers['authorization']
+                        print(f"Found auth token: {auth_token}")
+                        break
+
+        if not auth_token and auth_headers:
+            print("Warning: Could not find 'authorization' in headers. Available headers:", auth_headers)
+
+        # Extract cookies
         cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+        print(f"Extracted cookies: {cookies}")
+        
+        if not auth_token or not cookies:
+            print("인증 토큰 또는 쿠키를 추출하지 못했습니다.")
+            return None, None
+
+        print("인증 정보 추출 완료!")
         return auth_token, cookies
+
     except Exception as e:
         print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
     finally:
-        driver.quit()
-
-# 네이버에서 추출한 실제 토큰과 쿠키를 하드코딩
-NAVER_AUTHORIZATION = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IlJFQUxFU1RBVEUiLCJpYXQiOjE3NTI2NzU4MTIsImV4cCI6MTc1MjY4NjYxMn0.s8tfWUqWUlBJl9iYnf88fCFeEK6cfdb3vpfIXPKWimA"
-NAVER_COOKIES = {
-    "nhn.realestate.article.rlet_type_cd": "A01",
-    "nhn.realestate.article.trade_type_cd": "\"\"",
-    "nhn.realestate.article.ipaddress_city": "4100000000",
-    "_fwb": "209Pj0C8F6Ylg6pe4iuoOin.1752675766880",
-    "landHomeFlashUseYn": "Y",
-    "NAC": "ublRBsQUL19b",
-    "NACT": "1",
-    "NNB": "2UWWXBNWWV3WQ",
-    "SRT30": "1752675766",
-    "SRT5": "1752675766",
-    "BUC": "N1Kjd1bNrl7a8iR9fvi102_3qNacEZMaJHGwkQFpqGw=",
-    "REALESTATE": "Wed Jul 16 2025 23:23:32 GMT+0900 (Korean Standard Time)",
-    "PROP_TEST_KEY": "1752675812090.e487cf9404ce1117dbb015c1e959ec1042bbdf3f04a881b2582498707db8a901"
-    # ... 필요하다면 추가 쿠키를 여기에 넣으세요 ...
-}
+        try:
+            driver.quit()
+        except:
+            pass
 
 class RealEstateViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("부동산 매물 리스트 뷰어 (CSV)")
         self.resize(1200, 700)
-        # selenium-wire로 네이버 인증정보 자동 추출
+
+        # Try to get authentication automatically
+        print("네이버 인증 정보를 가져오는 중...")
         self.naver_auth, self.naver_cookies = get_naver_auth_and_cookies()
+        
         if not self.naver_auth or not self.naver_cookies:
-            raise RuntimeError("네이버 인증정보를 자동으로 가져오지 못했습니다. 환경변수 및 네트워크 상태를 확인하세요.")
-        # 자동 쿠키 갱신/토큰 생성 코드 비활성화
-        # self.naver_auth = generate_jwt_token()
-        # self.naver_cookies = get_naver_cookies_auto()
-        try:
-            self.naver_cookies = json.loads(os.getenv('NAVER_LAND_COOKIES', '{}'))
-        except json.JSONDecodeError:
-            print("Error: NAVER_LAND_COOKIES environment variable is not valid JSON")
-            self.naver_cookies = {}
-            
+            raise RuntimeError("네이버 인증정보를 자동으로 가져오지 못했습니다. 환경변수 NAVER_ID, NAVER_PW를 확인하세요.")
+
+        print(f"Authentication successful. Token: {self.naver_auth}")
+        print(f"Cookies: {self.naver_cookies}")
+
         self.data = self.load_data()
         self.notes = self.load_notes()
         self.saved_items = self.load_saved_items()
@@ -239,89 +323,57 @@ class RealEstateViewer(QMainWindow):
 
     def get_article_detail(self, article_no):
         """매물 상세 정보를 가져옵니다."""
-        # 캐시된 데이터가 있으면 반환
+        if not article_no:
+            return None
+            
+        # Check cache first
         if article_no in self.article_details_cache:
             return self.article_details_cache[article_no]
-                
-        try:
-            # API에서 가져오기
-            if not self.naver_auth or not self.naver_cookies:
-                QMessageBox.warning(self, "API 오류", "네이버 부동산 API 인증 정보가 없습니다. .env 파일을 확인해주세요.")
-                return None
-
-            # Extract the token from the Bearer string
-            token = self.naver_auth.replace('Bearer ', '')
             
-            # Basic token validation
-            try:
-                # Lazy import jwt to handle potential import errors
-                import importlib.util
-                jwt_spec = importlib.util.find_spec("jwt")
-                if jwt_spec is None:
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "PyJWT"])
-                import jwt
-                
-                secret_key = os.getenv('JWT_SECRET_KEY', 'naver_land_secret_key_2024')
-                try:
-                    decoded = jwt.decode(token, secret_key, algorithms=["HS256"])
-                except jwt.InvalidSignatureError:
-                    # If signature validation fails, try without verification
-                    decoded = jwt.decode(token, options={"verify_signature": False})
-                    
-                if 'exp' in decoded and decoded['exp'] < time.time():
-                    QMessageBox.warning(self, "API 오류", "API 토큰이 만료되었습니다. 프로그램을 다시 실행해주세요.")
-                    return None
-            except Exception as e:
-                print(f"토큰 검증 중 오류 발생: {e}")
-                QMessageBox.warning(self, "API 오류", "API 토큰이 유효하지 않습니다. 프로그램을 다시 실행해주세요.")
-                return None
-
+        # Rate limiting
+        current_time = time.time()
+        if current_time - self.last_api_call < 1.0:  # 1초 간격
+            time.sleep(1.0 - (current_time - self.last_api_call))
+        self.last_api_call = time.time()
+        
+        try:
+            url = f"https://new.land.naver.com/api/articles/{article_no}?complexNo="
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Authorization': self.naver_auth,
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': '*/*',
-                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Referer': f'https://new.land.naver.com/complexes/142817?articleNo={article_no}',
-                'authorization': self.naver_auth,
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'en-US,en;q=0.9',
                 'Connection': 'keep-alive',
+                'Host': 'new.land.naver.com',
+                'Referer': 'https://new.land.naver.com/',
+                'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
                 'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-origin',
-                'Priority': 'u=0',
-                'Origin': 'https://new.land.naver.com',
-                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"'
+                'Sec-Fetch-Site': 'same-origin'
             }
-
-            # API 호출 (1초 딜레이 추가)
-            time.sleep(1)
+            
             response = requests.get(
-                f'https://new.land.naver.com/api/articles/{article_no}',
-                params={'complexNo': ''},
+                url,
+                headers=headers,
                 cookies=self.naver_cookies,
-                headers=headers
+                timeout=10
             )
             
             if response.status_code == 200:
                 data = response.json()
-                # 응답 데이터를 캐시에만 저장
                 self.article_details_cache[article_no] = data
-                self.save_cache()
+                self.save_cache()  # 캐시 저장
                 return data
-            elif response.status_code == 401:
-                QMessageBox.warning(self, "API 오류", "API 인증이 만료되었습니다. 프로그램을 다시 실행해주세요.")
-                return None
             else:
-                QMessageBox.warning(self, "API 오류", f"매물 정보를 가져오는데 실패했습니다. (에러 코드: {response.status_code})")
+                print(f"API 요청 실패 - Status: {response.status_code}")
+                print(f"Response: {response.text}")
                 return None
                 
-        except requests.exceptions.RequestException as e:
-            QMessageBox.warning(self, "네트워크 오류", "네트워크 연결을 확인해주세요.")
-            print(f"API 호출 중 오류 발생: {e}")
-            return None
         except Exception as e:
-            QMessageBox.warning(self, "오류", f"매물 정보를 가져오는 중 오류가 발생했습니다: {str(e)}")
-            print(f"예상치 못한 오류 발생: {e}")
+            print(f"매물 상세 정보 조회 중 오류 발생: {e}")
             return None
 
     def format_description_with_gpt(self, description, article_no):
@@ -573,8 +625,13 @@ class RealEstateViewer(QMainWindow):
         splitter.addWidget(detail_container)
         splitter.setSizes([700, 500])
 
-        main_layout.addWidget(splitter, stretch=1)
+        # Add splitter to main layout
+        main_layout.addWidget(splitter)
+        
+        # Set the layout for main widget
         main_widget.setLayout(main_layout)
+        
+        # Set the central widget
         self.setCentralWidget(main_widget)
 
         # 최초 전체 데이터 표시
@@ -679,7 +736,7 @@ class RealEstateViewer(QMainWindow):
                         return float(str(val))
                     except:
                         return 0
-                filtered = sorted(filtered, key=lambda a: parse_area(a.get("area1", "0")), reverse=reverse)
+                filtered = sorted(filtered, key=lambda a: parse_area(a.get("area2", "0")), reverse=reverse)
 
         self.update_table(filtered)
 
@@ -719,13 +776,13 @@ class RealEstateViewer(QMainWindow):
             return "-"
         
         # 같은 단지, 같은 거래유형, 비슷한 면적의 매물들과 비교
-        area = float(article.get('area1', 0))
+        area = float(article.get('area2', 0))
         same_complex_articles = [
             a for a in self.data 
             if a.get('complexName') == complex_name 
             and a.get('tradeTypeName') == trade_type
             and a.get('articleNo') != article.get('articleNo')
-            and abs(float(a.get('area1', 0)) - area) <= 5  # 면적 차이 5m² 이내
+            and abs(float(a.get('area2', 0)) - area) <= 5  # 면적 차이 5m² 이내
         ]
         
         if same_complex_articles and price > 0:
@@ -812,7 +869,7 @@ class RealEstateViewer(QMainWindow):
             self.table.setItem(row, 4, QTableWidgetItem(article.get("tradeTypeName", "")))
             self.table.setItem(row, 5, QTableWidgetItem(article.get("dealOrWarrantPrc", "")))
             self.table.setItem(row, 6, QTableWidgetItem(article.get("rentPrc", "")))
-            self.table.setItem(row, 7, QTableWidgetItem(str(article.get("area1", ""))))
+            self.table.setItem(row, 7, QTableWidgetItem(str(article.get("area2", ""))))
             
             # 중개사 정보 (링크)
             realtor_name = article.get("realtorName", "")
@@ -917,8 +974,8 @@ class RealEstateViewer(QMainWindow):
         
         # 상세 정보
         detail_text += f"층: {article.get('floorInfo', '')}<br>"
-        detail_text += f"전용면적: {article.get('area1', '')}m²<br>"
-        detail_text += f"공급면적: {article.get('area2', '')}m²<br>"
+        detail_text += f"전용면적: {article.get('area2', '')}m²<br>"
+        detail_text += f"공급면적: {article.get('area1', '')}m²<br>"
         if article.get('direction'):
             detail_text += f"방향: {article.get('direction', '')}<br>"
         detail_text += f"확인일자: {article.get('articleConfirmYmd', '')}<br>"
@@ -1001,7 +1058,7 @@ class RealEstateViewer(QMainWindow):
         price_text = article.get('dealOrWarrantPrc', '0')
         rent_price_text = article.get('rentPrc', '0')
         rent_price = self.parse_price(rent_price_text)
-        area = float(article.get('area1', 0))  # 전용면적 (m²)
+        area = float(article.get('area2', 0))  # 전용면적 (m²)
         floor_info = article.get('floorInfo', '')
         complex_name = article.get('complexName', '')
         dong = article.get('dong', '')
@@ -1038,13 +1095,22 @@ class RealEstateViewer(QMainWindow):
             
             # 같은 단지 내 매물들과 비교 (비슷한 면적대)
             complex_name = article.get('complexName', '')
-            same_complex_articles = [
-                a for a in self.data 
-                if a.get('complexName') == complex_name 
-                and a.get('tradeTypeName') == trade_type
-                and a.get('articleNo') != article.get('articleNo')
-                and abs(float(a.get('area1', 0)) - area) <= 5  # 면적 차이 5m² 이내
-            ]
+            if complex_name in ['센텀하이브B동오피스', '센텀하이브B동상가']:
+                same_complex_articles = [
+                    a for a in self.data
+                    if a.get('complexName') == complex_name
+                    and a.get('tradeTypeName') == trade_type
+                    and a.get('articleNo') != article.get('articleNo')
+                    and abs(float(a.get('area2', 0)) - area) <= 5
+                ]
+            else:
+                same_complex_articles = [
+                    a for a in self.data
+                    if a.get('complexName') == complex_name
+                    and a.get('tradeTypeName') == trade_type
+                    and a.get('articleNo') != article.get('articleNo')
+                    and abs(float(a.get('area2', 0)) - area) <= 5
+                ]
             
             if same_complex_articles:
                 analysis_text += f"<br>▶ 같은 단지 내 비슷한 면적의 {trade_type} 매물 비교<br>"
@@ -1117,7 +1183,7 @@ class RealEstateViewer(QMainWindow):
                         analysis_text += f"• 최고 월세: {max_rent:.0f}만원<br>"
                 
                 # 면적 분포
-                areas = [float(a.get('area1', 0)) for a in same_complex_articles]
+                areas = [float(a.get('area2', 0)) for a in same_complex_articles]
                 if areas:
                     avg_area = sum(areas) / len(areas)
                     analysis_text += f"<br>▶ 면적 분포<br>"
@@ -1494,13 +1560,47 @@ class RealEstateViewer(QMainWindow):
             msg.show()
             QApplication.processEvents()  # Force UI update
             
-            # Run the fetch script
-            result = subprocess.run(['python3', 'fetch_all.py'], 
-                                 capture_output=True, 
-                                 text=True)
+            # Get the current working directory
+            current_dir = os.getcwd()
+            print(f"Running fetch_all.py from directory: {current_dir}")
+            
+            # Import and run fetch_all.py directly as a module
+            import fetch_all
+            
+            # Capture stdout and stderr
+            import io
+            import contextlib
+            
+            # Redirect stdout and stderr to capture output
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+            
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                try:
+                    # Run the main function from fetch_all
+                    fetch_all.main()
+                    return_code = 0
+                except Exception as e:
+                    print(f"Error in fetch_all.main(): {e}", file=stderr_capture)
+                    return_code = 1
+            
+            result = type('Result', (), {
+                'stdout': stdout_capture.getvalue(),
+                'stderr': stderr_capture.getvalue(),
+                'returncode': return_code
+            })()
+            
+            print(f"fetch_all.py stdout: {result.stdout}")
+            print(f"fetch_all.py stderr: {result.stderr}")
+            print(f"fetch_all.py return code: {result.returncode}")
             
             if result.returncode != 0:
-                raise Exception(f"Error running fetch_all.py:\n{result.stderr}")
+                error_msg = f"Error running fetch_all.py (return code: {result.returncode}):\n"
+                if result.stderr:
+                    error_msg += f"STDERR: {result.stderr}\n"
+                if result.stdout:
+                    error_msg += f"STDOUT: {result.stdout}"
+                raise Exception(error_msg)
             
             # Reload the data
             self.data = self.load_data()
@@ -1529,11 +1629,29 @@ class RealEstateViewer(QMainWindow):
             # Show success message
             QMessageBox.information(self, "업데이트 완료", "데이터가 성공적으로 업데이트되었습니다.")
             
+            # After updating the CSV, run the post-processing script
+            import subprocess
+            try:
+                subprocess.run(['python', 'update_centum_b_office.py'], check=True)
+            except Exception as e:
+                print(f'센텀하이브B동오피스 변환 스크립트 실행 중 오류 발생: {e}')
+            
         except Exception as e:
+            print(f"Update data error: {str(e)}")
             QMessageBox.critical(self, "업데이트 실패", f"데이터 업데이트 중 오류가 발생했습니다:\n{str(e)}")
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    viewer = RealEstateViewer()
-    viewer.show()
-    sys.exit(app.exec())
+    import traceback
+    try:
+        app = QApplication(sys.argv)
+        # Prompt for NAVER_ID/PW if missing
+        if not os.getenv('NAVER_ID') or not os.getenv('NAVER_PW'):
+            prompt_for_naver_credentials(env_path)
+            load_dotenv(env_path, override=True)
+        viewer = RealEstateViewer()
+        viewer.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        print("\n[ERROR] An exception occurred while starting the application:\n")
+        traceback.print_exc()
+        input("\nPress Enter to exit...")
