@@ -16,6 +16,14 @@ from seleniumwire import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    base_path = os.path.abspath(".")
+    if hasattr(sys, '_MEIPASS'):  # PyInstaller creates a temp folder
+        base_path = sys._MEIPASS
+    return os.path.join(base_path, relative_path)
+
+
 def prompt_for_naver_credentials_cli(env_path):
     print("네이버 아이디와 비밀번호를 입력하세요. (이 정보는 이 컴퓨터의 .env 파일에 저장됩니다)")
     naver_id = input('네이버 아이디: ').strip()
@@ -273,7 +281,7 @@ def save_to_csv(all_articles, previous_data):
         writer.writerows(merged_data.values())
 
     # 마지막 업데이트 시간 저장
-    with open('last_update.txt', 'w', encoding='utf-8') as f:
+    with open(get_resource_path('last_update.txt'), 'w', encoding='utf-8') as f:
         f.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
 def main():
