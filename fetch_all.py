@@ -16,101 +16,108 @@ from seleniumwire import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-def get_naver_auth_and_cookies():
-    naver_id = os.getenv('NAVER_ID')
-    naver_pw = os.getenv('NAVER_PW')
+def prompt_for_naver_credentials_cli(env_path):
+    print("네이버 아이디와 비밀번호를 입력하세요. (이 정보는 이 컴퓨터의 .env 파일에 저장됩니다)")
+    naver_id = input('네이버 아이디: ').strip()
+    import getpass
+    naver_pw = getpass.getpass('네이버 비밀번호: ').strip()
     if not naver_id or not naver_pw:
-        print("환경변수 NAVER_ID, NAVER_PW가 필요합니다.")
+        print('모든 정보를 입력해야 합니다.')
         return None, None
+    # Save to .env
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    lines = [l for l in lines if not l.startswith('NAVER_ID=') and not l.startswith('NAVER_PW=')]
+    lines.append(f'NAVER_ID={naver_id}\n')
+    lines.append(f'NAVER_PW={naver_pw}\n')
+    with open(env_path, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    os.environ['NAVER_ID'] = naver_id
+    os.environ['NAVER_PW'] = naver_pw
+    return naver_id, naver_pw
 
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    # Use a generic user-agent
-    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
-
-    import sys
-    if sys.platform == 'darwin':  # macOS
-        chrome_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-        if os.path.exists(chrome_path):
-            options.binary_location = chrome_path
-        else:
-            print("Chrome 브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인해주세요. (macOS)")
-            return None, None
-    elif sys.platform.startswith('win'):
-        # On Windows, do not set binary_location; ChromeDriverManager should find Chrome
-        pass
-    else:
-        print(f"이 운영체제({sys.platform})에서는 Chrome 브라우저 경로를 자동으로 설정하지 않습니다. Chrome이 설치되어 있고 PATH에 등록되어 있어야 합니다.")
-        # Optionally, you could add Linux logic here
-
-    try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 10)
-
-        print("네이버 로그인 페이지로 이동 중...")
-        # Navigate to Naver login
-        driver.get('https://nid.naver.com/nidlogin.login')
-        time.sleep(2)  # Short pause for page load
-
-        print("로그인 시도 중...")
-        # Execute JavaScript to bypass bot detection
-        driver.execute_script(
-            f"document.getElementById('id').value='{naver_id}';"
-            f"document.getElementById('pw').value='{naver_pw}';"
-        )
-        time.sleep(1)
-
-        # Click login button
-        login_button = wait.until(EC.element_to_be_clickable((By.ID, 'log.login')))
-        login_button.click()
-        time.sleep(3)  # Wait for login to complete
-
-        print("네이버 부동산으로 이동 중...")
-        # Navigate to Naver Land
-        driver.get('https://new.land.naver.com/')
-        time.sleep(2)
-
-        print("인증 정보 추출 중...")
-        # Navigate to a property detail page to trigger authorization
-        driver.get('https://new.land.naver.com/complexes/142817?articleNo=2324123456')
-        time.sleep(3)
-
-        # Extract authorization token
-        auth_token = None
-        for request in driver.requests:
-            if request.url and 'land.naver.com/api' in request.url:
-                if request.headers:
-                    print(f"Found API request headers: {request.headers}")
-                    if 'authorization' in request.headers:
-                        auth_token = request.headers['authorization']
-                        print(f"Found auth token: {auth_token}")
-                        break
-
-        # Extract cookies
-        cookies = {c['name']: c['value'] for c in driver.get_cookies()}
-        
-        if not auth_token or not cookies:
-            print("인증 토큰 또는 쿠키를 추출하지 못했습니다.")
-            return None, None
-
-        print("인증 정보 추출 완료!")
-        return auth_token, cookies
-
-    except Exception as e:
-        print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-    finally:
-        try:
-            driver.quit()
-        except:
+def get_naver_auth_and_cookies():
+    env_path = os.path.abspath('.env')
+    for attempt in range(2):
+        naver_id = os.getenv('NAVER_ID')
+        naver_pw = os.getenv('NAVER_PW')
+        if not naver_id or not naver_pw:
+            naver_id, naver_pw = prompt_for_naver_credentials_cli(env_path)
+            if not naver_id or not naver_pw:
+                return None, None
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+        import sys
+        if sys.platform == 'darwin':
+            chrome_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+            if os.path.exists(chrome_path):
+                options.binary_location = chrome_path
+            else:
+                print("Chrome 브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인해주세요. (macOS)")
+                return None, None
+        elif sys.platform.startswith('win'):
             pass
+        else:
+            print(f"이 운영체제({sys.platform})에서는 Chrome 브라우저 경로를 자동으로 설정하지 않습니다. Chrome이 설치되어 있고 PATH에 등록되어 있어야 합니다.")
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            wait = WebDriverWait(driver, 10)
+            print("네이버 로그인 페이지로 이동 중...")
+            driver.get('https://nid.naver.com/nidlogin.login')
+            time.sleep(2)
+            print("로그인 시도 중...")
+            driver.execute_script(
+                f"document.getElementById('id').value='{naver_id}';"
+                f"document.getElementById('pw').value='{naver_pw}';"
+            )
+            time.sleep(1)
+            login_button = wait.until(EC.element_to_be_clickable((By.ID, 'log.login')))
+            login_button.click()
+            time.sleep(3)
+            print("네이버 부동산으로 이동 중...")
+            driver.get('https://land.naver.com/')
+            time.sleep(2)
+            print("인증 정보 추출 중...")
+            driver.get('https://new.land.naver.com/complexes/142817?articleNo=2324123456')
+            time.sleep(3)
+            auth_token = None
+            for request in driver.requests:
+                if request.url and 'land.naver.com/api' in request.url:
+                    if request.headers:
+                        print(f"Found API request headers: {request.headers}")
+                        if 'authorization' in request.headers:
+                            auth_token = request.headers['authorization']
+                            print(f"Found auth token: {auth_token}")
+                            break
+            cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+            if not auth_token or not cookies:
+                print("인증 토큰 또는 쿠키를 추출하지 못했습니다.")
+                os.environ['NAVER_ID'] = ''
+                os.environ['NAVER_PW'] = ''
+                continue
+            print("인증 정보 추출 완료!")
+            return auth_token, cookies
+        except Exception as e:
+            print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            os.environ['NAVER_ID'] = ''
+            os.environ['NAVER_PW'] = ''
+            continue
+        finally:
+            try:
+                driver.quit()
+            except:
+                pass
+    return None, None
 
 def load_previous_data():
     """이전 데이터 로드"""

@@ -93,106 +93,92 @@ print(f"Looking for .env at: {env_path}")  # Debug print
 load_dotenv(env_path)
 
 def get_naver_auth_and_cookies():
-    naver_id = os.getenv('NAVER_ID')
-    naver_pw = os.getenv('NAVER_PW')
-    if not naver_id or not naver_pw:
-        print("환경변수 NAVER_ID, NAVER_PW가 필요합니다.")
-        return None, None
-
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    # Use a generic user-agent
-    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
-
-    # OS-specific Chrome path logic
-    if sys.platform == 'darwin':  # macOS
-        chrome_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-        if os.path.exists(chrome_path):
-            options.binary_location = chrome_path
-        else:
-            print("Chrome 브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인해주세요. (macOS)")
-            return None, None
-    elif sys.platform.startswith('win'):
-        # On Windows, do not set binary_location; ChromeDriverManager should find Chrome
-        pass
-    else:
-        print(f"이 운영체제({sys.platform})에서는 Chrome 브라우저 경로를 자동으로 설정하지 않습니다. Chrome이 설치되어 있고 PATH에 등록되어 있어야 합니다.")
-        # Optionally, you could add Linux logic here
-
-    try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 10)
-
-        print("네이버 로그인 페이지로 이동 중...")
-        # Navigate to Naver login
-        driver.get('https://nid.naver.com/nidlogin.login')
-        time.sleep(2)  # Short pause for page load
-
-        print("로그인 시도 중...")
-        # Execute JavaScript to bypass bot detection
-        driver.execute_script(
-            f"document.getElementById('id').value='{naver_id}';"
-            f"document.getElementById('pw').value='{naver_pw}';"
-        )
-        time.sleep(1)
-
-        # Click login button
-        login_button = wait.until(EC.element_to_be_clickable((By.ID, 'log.login')))
-        login_button.click()
-        time.sleep(3)  # Wait for login to complete
-
-        print("네이버 부동산으로 이동 중...")
-        # Navigate to Naver Land
-        driver.get('https://land.naver.com/')
-        time.sleep(2)
-
-        print("인증 정보 추출 중...")
-        # Navigate to a property detail page to trigger authorization
-        driver.get('https://new.land.naver.com/complexes/142817?articleNo=2324123456')
-        time.sleep(3)
-
-        # Extract authorization token
-        auth_token = None
-        auth_headers = {}
-        for request in driver.requests:
-            if request.url and 'land.naver.com/api' in request.url:
-                if request.headers:
-                    print(f"Found API request headers: {request.headers}")
-                    auth_headers = request.headers
-                    if 'authorization' in request.headers:
-                        auth_token = request.headers['authorization']
-                        print(f"Found auth token: {auth_token}")
-                        break
-
-        if not auth_token and auth_headers:
-            print("Warning: Could not find 'authorization' in headers. Available headers:", auth_headers)
-
-        # Extract cookies
-        cookies = {c['name']: c['value'] for c in driver.get_cookies()}
-        print(f"Extracted cookies: {cookies}")
-        
-        if not auth_token or not cookies:
-            print("인증 토큰 또는 쿠키를 추출하지 못했습니다.")
-            return None, None
-
-        print("인증 정보 추출 완료!")
-        return auth_token, cookies
-
-    except Exception as e:
-        print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-    finally:
-        try:
-            driver.quit()
-        except:
+    env_path = get_resource_path('.env')
+    for attempt in range(2):
+        naver_id = os.getenv('NAVER_ID')
+        naver_pw = os.getenv('NAVER_PW')
+        if not naver_id or not naver_pw:
+            print("환경변수 NAVER_ID, NAVER_PW가 필요합니다.")
+            naver_id, naver_pw = prompt_for_naver_credentials(env_path)
+            if not naver_id or not naver_pw:
+                return None, None
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+        if sys.platform == 'darwin':
+            chrome_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+            if os.path.exists(chrome_path):
+                options.binary_location = chrome_path
+            else:
+                print("Chrome 브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인해주세요. (macOS)")
+                return None, None
+        elif sys.platform.startswith('win'):
             pass
+        else:
+            print(f"이 운영체제({sys.platform})에서는 Chrome 브라우저 경로를 자동으로 설정하지 않습니다. Chrome이 설치되어 있고 PATH에 등록되어 있어야 합니다.")
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            wait = WebDriverWait(driver, 10)
+            print("네이버 로그인 페이지로 이동 중...")
+            driver.get('https://nid.naver.com/nidlogin.login')
+            time.sleep(2)
+            print("로그인 시도 중...")
+            driver.execute_script(
+                f"document.getElementById('id').value='{naver_id}';"
+                f"document.getElementById('pw').value='{naver_pw}';"
+            )
+            time.sleep(1)
+            login_button = wait.until(EC.element_to_be_clickable((By.ID, 'log.login')))
+            login_button.click()
+            time.sleep(3)
+            print("네이버 부동산으로 이동 중...")
+            driver.get('https://land.naver.com/')
+            time.sleep(2)
+            print("인증 정보 추출 중...")
+            driver.get('https://new.land.naver.com/complexes/142817?articleNo=2324123456')
+            time.sleep(3)
+            auth_token = None
+            auth_headers = {}
+            for request in driver.requests:
+                if request.url and 'land.naver.com/api' in request.url:
+                    if request.headers:
+                        print(f"Found API request headers: {request.headers}")
+                        auth_headers = request.headers
+                        if 'authorization' in request.headers:
+                            auth_token = request.headers['authorization']
+                            print(f"Found auth token: {auth_token}")
+                            break
+            if not auth_token and auth_headers:
+                print("Warning: Could not find 'authorization' in headers. Available headers:", auth_headers)
+            cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+            print(f"Extracted cookies: {cookies}")
+            if not auth_token or not cookies:
+                print("인증 토큰 또는 쿠키를 추출하지 못했습니다.")
+                # Clear env so next attempt will prompt
+                os.environ['NAVER_ID'] = ''
+                os.environ['NAVER_PW'] = ''
+                continue
+            print("인증 정보 추출 완료!")
+            return auth_token, cookies
+        except Exception as e:
+            print(f"네이버 자동 로그인/토큰 추출 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clear env so next attempt will prompt
+            os.environ['NAVER_ID'] = ''
+            os.environ['NAVER_PW'] = ''
+            continue
+        finally:
+            try:
+                driver.quit()
+            except:
+                pass
+    return None, None
 
 class RealEstateViewer(QMainWindow):
     def __init__(self):
