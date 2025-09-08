@@ -398,33 +398,20 @@ def main():
     # 이전 데이터 로드
     previous_data = load_previous_data()
     
-    # ID 기반 수집 가능한 단지들 (센텀하이브 A동 제외)
+    # 송도 주요 단지 정보
     complexes = [
         {"id": "142817", "name": "더샵송도센텀하이브B", "dong": ""},
         {"id": "142816", "name": "송도센트로드", "dong": ""},
-        {"id": "142815", "name": "송도아크베이", "dong": ""}
+        {"id": "142815", "name": "송도아크베이", "dong": ""},
+        {"id": "142814", "name": "센텀하이브 A동", "dong": ""}
     ]
-
-    # 센텀하이브 좌표 정보
-    centum_coordinates = {
-        "A동": {
-            "lat_min": 37.393104, "lat_max": 37.395104,
-            "lng_min": 126.637004, "lng_max": 126.639004,
-            "name": "센텀하이브A동오피스"
-        },
-        "B동상가": {
-            "lat_min": 37.393104, "lat_max": 37.395104,
-            "lng_min": 126.637004, "lng_max": 126.639004,
-            "name": "센텀하이브B동상가"
-        }
-    }
     
     all_articles = []
-    # Estimate total articles for progress bar
-    total_articles = len(complexes) * 50 + len(centum_coordinates) * 30
-
+    # Estimate total articles for progress bar (rough estimate)
+    total_articles = len(complexes) * 50  # Assume ~50 articles per complex
+    
     with tqdm(total=total_articles, desc="전체 진행률", unit="매물") as pbar:
-        # ID 기반 수집 (기존 단지들)
+        # 각 단지별로 매물 수집
         for complex_info in complexes:
             articles = fetch_by_complex_id(
                 complex_info["id"],
@@ -432,15 +419,6 @@ def main():
                 complex_info["dong"],
                 pbar,
                 previous_data
-            )
-            all_articles.extend(articles)
-        
-        # 좌표 기반 수집 (센텀하이브 A동, B동 상가)
-        for coord_key, coord_info in centum_coordinates.items():
-            articles = fetch_by_coordinates(
-                coord_info["lat_min"], coord_info["lat_max"],
-                coord_info["lng_min"], coord_info["lng_max"],
-                coord_info["name"], coord_key, pbar, previous_data
             )
             all_articles.extend(articles)
     
